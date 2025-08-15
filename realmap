@@ -91,10 +91,15 @@ class RoadNetworkSelector:
         self.btn_reset = Button(ax_reset, 'All reset')
         self.btn_reset.on_clicked(self.reset_selection)
 
-        # 新增：距离计算按钮
+        # 距离计算按钮
         ax_dijkstra = plt.axes([0.66, 0.03, 0.10, 0.06])
         self.btn_dijkstra = Button(ax_dijkstra, 'Calculate Distances')
         self.btn_dijkstra.on_clicked(self.calculate_all_distances)
+
+        # 优化按钮（新添加）
+        ax_optimize = plt.axes([0.27, 0.03, 0.10, 0.06])
+        self.btn_optimize = Button(ax_optimize, 'Optimize')
+        self.btn_optimize.on_clicked(self.optimize_gathering_points)
 
     def draw_map(self, preserve_view=True):
         if preserve_view:
@@ -1239,6 +1244,47 @@ class RoadNetworkSelector:
         self.selected_path_nodes = selected_path_nodes
         self.draw_map()
         print("已撤销上一步操作")
+
+    def optimize_gathering_points(self):
+        """调用遗传算法优化集合点选择"""
+        try:
+            from genetic_algorithm import MultiObjectiveGA
+
+            # 验证必要的数据
+            if self.distance_matrix is None:
+                print("请先计算距离矩阵，使用 calculate_all_distances()")
+                return
+
+            if self.crossing_matrix is None:
+                print("请先计算穿越次数矩阵")
+                return
+
+            if not self.region_centroid_nodes:
+                print("请先完成区域划分")
+                return
+
+            if not self.gathering_points:
+                print("请先设置候选集合点")
+                return
+
+            print("\n开始优化集合点选择...")
+            print(f"用户: zzmghzy")
+            print(f"需求点数量: {len(self.region_centroid_nodes)}")
+            print(f"候选集合点数量: {len(self.gathering_points)}")
+
+            # 创建优化器实例
+            optimizer = MultiObjectiveGA(self)
+
+            # 运行优化
+            results = optimizer.run_optimization()
+
+            # 可视化结果
+            optimizer.visualize_results(results)
+
+        except Exception as e:
+            print(f"优化过程出错: {e}")
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
     selector = RoadNetworkSelector(
