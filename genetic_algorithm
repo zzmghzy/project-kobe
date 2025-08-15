@@ -1,0 +1,203 @@
+import numpy as np
+from typing import List, Tuple, Dict
+import random
+from dataclasses import dataclass
+import matplotlib.pyplot as plt
+from realmap import RoadNetworkSelector
+
+@dataclass
+class Solution:
+    chromosome: np.ndarray
+    objective1: float  # 总步行距离
+    objective2: float  # 总穿越次数
+    dominated_count: int = 0
+    rank: int = 0
+    assignments: Dict = None  # 存储需求点到集合点的分配方案
+
+
+class MultiObjectiveGA:
+    def __init__(self, road_network: RoadNetworkSelector):
+        self.road_network = road_network
+
+        # 从road_network获取数据
+        self.demand_points = self.road_network.region_centroid_nodes
+        self.candidate_points = list(self.road_network.gathering_points)
+        self.distance_matrix = self.road_network.distance_matrix
+        self.crossing_matrix = self.road_network.crossing_matrix  # 穿越次数矩阵
+        self.capacities = self.road_network.gathering_point_capacities
+
+        # 验证数据
+        if not all([self.demand_points, self.candidate_points,
+                    self.distance_matrix is not None,
+                    self.crossing_matrix is not None]):
+            raise ValueError("请先完成路网选择和距离计算")
+
+        # 设置参数
+        self.dmax = 2000  # 最大步行距离约束（米）
+        self.population_size = 100
+        self.num_generations = 200
+        self.crossover_rate = 0.9
+        self.mutation_rate = 0.1
+
+        # 手动输入每个需求点的需求量
+        self.demand_volumes = {}
+        self._input_demand_volumes()
+
+        # 初始化种群
+        self.population = self._initialize_population()
+
+    def _input_demand_volumes(self):
+        """手动输入需求点的需求量"""
+        print("\n请输入各需求点的疏散需求量：")
+        for i, (node_id, _) in enumerate(self.demand_points):
+            while True:
+                try:
+                    volume = float(input(f"需求点 {i + 1} (节点 {node_id}) 的需求量: "))
+                    if volume > 0:
+                        self.demand_volumes[node_id] = volume
+                        break
+                    else:
+                        print("需求量必须大于0，请重新输入")
+                except ValueError:
+                    print("请输入有效的数字")
+
+    def calculate_objectives(self, chromosome: np.ndarray) -> Tuple[float, float]:
+        """计算两个目标函数值和检查约束条件"""
+        selected_points = np.where(chromosome == 1)[0]
+        if len(selected_points) == 0:
+            return float('inf'), float('inf')
+
+        # 初始化目标函数值和分配方案
+        total_walking_distance = 0
+        total_crossing_count = 0
+        assignments = {}  # 记录每个需求点分配到哪个集合点
+        facility_loads = {idx: 0 for idx in selected_points}  # 记录每个集合点的负载
+
+        # 为每个需求点找到最佳分配
+        for i, (demand_id, _) in enumerate(self.demand_points):
+            min_cost = float('inf')
+            best_facility = None
+            demand_volume = self.demand_volumes[demand_id]
+
+            # 尝试分配到每个选中的集合点
+            for facility_idx in selected_points:
+                distance = self.distance_matrix.iloc[i, facility_idx]
+                crossings = self.crossing_matrix[i, facility_idx]
+
+                # 检查距离约束
+                if distance > self.dmax:
+                    continue
+
+                # 检查容量约束
+                facility_id = self.candidate_points[facility_idx]
+                capacity = self.capacities.get(facility_id, float('inf'))
+                if facility_loads[facility_idx] + demand_volume > capacity:
+                    continue
+
+                # 计算总成本（这里可以根据需要调整权重）
+                cost = distance + crossings * 100  # 给穿越次数更大的权重
+
+                if cost < min_cost:
+                    min_cost = cost
+                    best_facility = facility_idx
+
+            # 如果找到可行的分配
+            if best_facility is not None:
+                facility_id = self.candidate_points[best_facility]
+                assignments[demand_id] = facility_id
+                facility_loads[best_facility] += demand_volume
+
+                # 累加目标函数值
+                total_walking_distance += demand_volume * self.distance_matrix.iloc[i, best_facility]
+                total_crossing_count += demand_volume * self.crossing_matrix[i, best_facility]
+
+        # 如果有需求点未能分配，返回无穷大
+        if len(assignments) < len(self.demand_points):
+            return float('inf'), float('inf')
+
+        return total_walking_distance, total_crossing_count
+
+    def _initialize_population(self) -> List[Solution]:
+        """初始化种群"""
+        population = []
+        num_candidates = len(self.candidate_points)
+
+        while len(population) < self.population_size:
+            # 随机生成染色体
+            chromosome = np.zeros(num_candidates)
+            num_selected = random.randint(1, min(5, num_candidates))
+            selected_indices = random.sample(range(num_candidates), num_selected)
+            chromosome[selected_indices] = 1
+
+            # 计算目标函数值
+            obj1, obj2 = self.calculate_objectives(chromosome)
+
+            # 只有可行解才加入种群
+            if obj1 != float('inf') and obj2 != float('inf'):
+                solution = Solution(chromosome=chromosome,
+                                    objective1=obj1,
+                                    objective2=obj2)
+                population.append(solution)
+
+        return population
+
+    def crossover(self, parent1: Solution, parent2: Solution) -> Tuple[Solution, Solution]:
+        """交叉操作"""
+        if random.random() > self.crossover_rate:
+            return parent1, parent2
+
+        max_attempts = 10  # 最大尝试次数
+        for _ in range(max_attempts):
+            # 两点交叉
+            point1, point2 = sorted(random.sample(range(len(parent1.chromosome)), 2))
+
+            child1_chrom = parent1.chromosome.copy()
+            child2_chrom = parent2.chromosome.copy()
+
+            child1_chrom[point1:point2] = parent2.chromosome[point1:point2]
+            child2_chrom[point1:point2] = parent1.chromosome[point1:point2]
+
+            # 检查是否至少选择了一个设施
+            if np.sum(child1_chrom) > 0 and np.sum(child2_chrom) > 0:
+                # 计算新解的目标函数值
+                obj1_1, obj2_1 = self.calculate_objectives(child1_chrom)
+                obj1_2, obj2_2 = self.calculate_objectives(child2_chrom)
+
+                # 检查解的可行性
+                if obj1_1 != float('inf') and obj1_2 != float('inf'):
+                    child1 = Solution(chromosome=child1_chrom, objective1=obj1_1, objective2=obj2_1)
+                    child2 = Solution(chromosome=child2_chrom, objective1=obj1_2, objective2=obj2_2)
+                    return child1, child2
+
+        # 如果没有找到可行的子代，返回父代的副本
+        return parent1, parent2
+
+    def visualize_results(self, results: Dict):
+        """可视化结果"""
+        # 创建图形
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+        # 1. 绘制目标空间中的帕累托前沿
+        pareto_solutions = results['pareto_solutions']
+        obj1_values = [sol['objective1'] for sol in pareto_solutions]
+        obj2_values = [sol['objective2'] for sol in pareto_solutions]
+
+        ax1.scatter(obj1_values, obj2_values, c='b', marker='o')
+        ax1.set_xlabel('总步行距离')
+        ax1.set_ylabel('总穿越次数')
+        ax1.set_title('Pareto Front')
+
+        # 2. 在原地图上显示一个代表性解（可以选择折中解）
+        # 这部分需要调用realmap中的绘图功能
+        # TODO: 实现地图可视化
+
+        plt.tight_layout()
+        plt.show()
+
+        # 打印详细结果
+        print("\n帕累托最优解集:")
+        for i, sol in enumerate(pareto_solutions):
+            print(f"\n解 {i + 1}:")
+            print(f"总步行距离: {sol['objective1']:.2f}")
+            print(f"总穿越次数: {sol['objective2']:.2f}")
+            print(f"选中的集合点: {[self.candidate_points[idx] for idx in sol['selected_points']]}")
