@@ -1245,18 +1245,14 @@ class RoadNetworkSelector:
         self.draw_map()
         print("已撤销上一步操作")
 
-    def optimize_gathering_points(self):
+    def optimize_gathering_points(self, event):  # 修改这里，明确接收event参数
         """调用遗传算法优化集合点选择"""
         try:
             from genetic_algorithm import MultiObjectiveGA
 
             # 验证必要的数据
             if self.distance_matrix is None:
-                print("请先计算距离矩阵，使用 calculate_all_distances()")
-                return
-
-            if self.crossing_matrix is None:
-                print("请先计算穿越次数矩阵")
+                print("请先点击 'Calculate Distances' 计算距离矩阵")
                 return
 
             if not self.region_centroid_nodes:
@@ -1268,9 +1264,26 @@ class RoadNetworkSelector:
                 return
 
             print("\n开始优化集合点选择...")
-            print(f"用户: zzmghzy")
-            print(f"需求点数量: {len(self.region_centroid_nodes)}")
-            print(f"候选集合点数量: {len(self.gathering_points)}")
+            from datetime import datetime
+            print(f"Current Date and Time (UTC): {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"Current User's Login: zzmghzy")
+
+            # 添加需求量输入
+            self.demand_volumes = {}
+            print("\n请输入各需求点的疏散需求量：")
+            for i, (node_id, _) in enumerate(self.region_centroid_nodes):
+                while True:
+                    try:
+                        volume = float(input(f"需求点 {i + 1} (节点 {node_id}) 的需求量: "))
+                        if volume > 0:
+                            self.demand_volumes[node_id] = volume
+                            break
+                        else:
+                            print("需求量必须大于0，请重新输入")
+                    except ValueError:
+                        print("请输入有效的数字")
+
+            print("\n需求量输入完成，开始优化...")
 
             # 创建优化器实例
             optimizer = MultiObjectiveGA(self)
